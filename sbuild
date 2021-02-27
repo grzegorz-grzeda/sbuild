@@ -1,0 +1,52 @@
+#!/usr/bin/python3
+# THE BEER-WARE LICENSE" (Revision 42):
+# Grzegorz Grzęda wrote this file. As long as you retain this notice you
+# can do whatever you want with this stuff. If we meet some day, and you think
+# this stuff is worth it, you can buy me a beer in return. Grzegorz Grzęda
+
+
+from argparse import ArgumentParser
+from logging import info, error, basicConfig, INFO, DEBUG
+
+
+def do_clear():
+    info("Clearing project")
+
+
+def do_build():
+    info("Building project")
+
+
+ACTIONS = {
+    "clear": do_clear,
+    "build": do_build
+}
+
+
+def main():
+    """ Main function """
+
+    args = init_parser()
+    configure_logging(args.verbose)
+
+    ACTIONS[args.action]()
+
+
+def init_parser():
+    """ Init argument parser """
+    parser = ArgumentParser(description="Simple build script")
+    parser.add_argument('action', choices=ACTIONS.keys())
+    parser.add_argument(
+        '--verbose', help='Set more verbose output', action='store_true')
+
+    return parser.parse_args()
+
+
+def configure_logging(is_verbose):
+    """ Configure logging module depending on verbosity """
+    basicConfig(
+        format="%(asctime)s [%(levelname)s] %(message)s", level=DEBUG if is_verbose else INFO)
+
+
+if __name__ == "__main__":
+    main()
