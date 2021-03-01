@@ -3,49 +3,197 @@
 # Grzegorz Grzęda wrote this file. As long as you retain this notice you
 # can do whatever you want with this stuff. If we meet some day, and you think
 # this stuff is worth it, you can buy me a beer in return. Grzegorz Grzęda
+#!/usr/bin/python3
 
-
+import json
+import subprocess
+from os import path
+from sys import exit
 from argparse import ArgumentParser
-from logging import info, error, basicConfig, INFO, DEBUG
+from logging import info, debug, error, basicConfig, INFO, DEBUG
+
+BUILD_DIR = 'build'
+PROJECT_FILE = 'project.json'
+
+PROJECT_DATA = None
+
+PLATFORMS = {}
 
 
-def do_clear():
-    info("Clearing project")
+def preprocess():
+    srcs = [src for src in PROJECT_DATA['application']['code']]
+    incs = [f'-I{inc}' for inc in PROJECT_DATA['application']['include']]
+
+    incs = list(set(incs))
+
+    for platform in PROJECT_DATA['platforms']:
+        build_dir = path.join(BUILD_DIR, platform['name'])
+        compiler = path.join(platform['compile']
+                             ['path'], platform['compile']['name'])
+        compile_flags = platform['compile']['flags']
+        linker = path.join(platform['link']['path'], platform['link']['name'])
+        link_flags = platform['link']['flags']
+        compile_list = []
+        objs = []
+        exe = path.join(build_dir, PROJECT_DATA['name'])
+
+        for source in srcs:
+            compile_entry = []
+            compile_entry.append(compiler)
+            compile_entry.extend(compile_flags)
+            compile_entry.extend(incs)
+            compile_entry.append('-c')
+            compile_entry.append(source)
+            compile_entry.append('-o')
+            obj = path.join(build_dir, f'{source}.o')
+            objs.append(obj)
+            compile_entry.append(obj)
+            compile_list.append(compile_entry)
+
+        for source in platform['code']:
+            compile_entry = []
+            compile_entry.append(compiler)
+            compile_entry.extend(compile_flags)
+            compile_entry.extend(incs)
+            compile_entry.append('-c')
+            compile_entry.append(source)
+            compile_entry.append('-o')
+            obj = path.join(build_dir, f'{source}.o')
+            objs.append(obj)
+            compile_entry.append(obj)
+            compile_list.append(compile_entry)
+
+        link_entry = []
+        link_entry.append(linker)
+        link_entry.extend(link_flags)
+        link_entry.extend(objs)
+        link_entry.append('-o')
+        link_entry.append(exe)
+
+        clear_cmd = ["rm", "-rf", build_dir]
+        prep_cmd = []
+
+        objs_dirnames = list(set([path.dirname(o) for o in objs]))
+
+        for obj in objs_dirnames:
+            prep_entry = []
+            prep_entry.append('mkdir')
+            prep_entry.append('-p')
+            prep_entry.append(obj)
+            prep_cmd.append(prep_entry)
+
+        PLATFORMS[platform['name']] = {
+            "clear": clear_cmd,
+            "build": {
+                "prepare": prep_cmd,
+                "compile": compile_list,
+                "link": link_entry
+            }
+        }
 
 
-def do_build():
-    info("Building project")
+def terminate_fail():
+    exit(-1)
 
 
-ACTIONS = {
-    "clear": do_clear,
-    "build": do_build
-}
+def get_cwd():
+    return path.dirname(__file__)
+
+
+def run_command(command_entry):
+    debug(" ".join(command_entry))
+    result = subprocess.run(
+        command_entry, cwd=get_cwd(), stdout=subprocess.PIPE)
+
+    if result.returncode != 0:
+        terminate_fail()
+
+
+def clear(platform_name):
+    info(f"Clearing {platform_name}")
+    run_command(PLATFORMS[platform_name]['clear'])
+
+
+def prepare(platform_name):
+    info(f"Preparing {platform_name}")
+    for prep in PLATFORMS[platform_name]['build']['prepare']:
+        run_command(prep)
+
+
+def compile(platform_name):
+    info(f"Compiling {platform_name}")
+    for compile in PLATFORMS[platform_name]['build']['compile']:
+        run_command(compile)
+
+
+def link(platform_name):
+    info(f"Linking {platform_name}")
+    run_command(PLATFORMS[platform_name]['build']['link'])
 
 
 def main():
-    """ Main function """
+    global PROJECT_DATA
 
-    args = init_parser()
-    configure_logging(args.verbose)
+    try:
+        with open(PROJECT_FILE) as project:
+            PROJECT_DATA = json.load(project)
 
-    ACTIONS[args.action]()
+        preprocess()
+
+        available_platforms = ['all']
+        available_platforms.extend([platform for platform in PLATFORMS])
+
+        available_actions = ['all', 'clear', 'build']
+
+        args = init_parser(available_platforms, available_actions)
+        configure_logging(args.verbose)
+
+        if 'all' in args.platform:
+            for platform in PLATFORMS:
+                perform_action(args.action, platform)
+        else:
+            perform_action(args.action, args.platform)
+    except FileNotFoundError:
+        error(f"Couldn't find file {PROJECT_FILE}")
+    except KeyError as err:
+        error(f"Couldn't find key {err} in {PROJECT_FILE}")
 
 
-def init_parser():
+def perform_action(action, platform):
+    if 'clear' in action or 'all' in action:
+        clear(platform)
+    if 'build' in action or 'all' in action:
+        prepare(platform)
+        compile(platform)
+        link(platform)
+
+
+def init_parser(available_platforms, available_actions):
     """ Init argument parser """
     parser = ArgumentParser(description="Simple build script")
-    parser.add_argument('action', choices=ACTIONS.keys())
-    parser.add_argument(
-        '--verbose', help='Set more verbose output', action='store_true')
+    parser.add_argument('action',
+                        choices=available_actions,
+                        default=available_actions[0],
+                        const=available_actions[0],
+                        nargs='?',
+                        help='Action to be conducted')
+    parser.add_argument('platform',
+                        choices=available_platforms,
+                        default=available_platforms[0],
+                        const=available_platforms[0],
+                        nargs='?',
+                        help='Platform to be selected')
+    parser.add_argument('--verbose',
+                        help='Set more verbose output',
+                        action='store_true')
 
     return parser.parse_args()
 
 
 def configure_logging(is_verbose):
     """ Configure logging module depending on verbosity """
-    basicConfig(
-        format="%(asctime)s [%(levelname)s] %(message)s", level=DEBUG if is_verbose else INFO)
+    basicConfig(format="%(asctime)s [%(levelname)s] %(message)s",
+                level=DEBUG if is_verbose else INFO)
 
 
 if __name__ == "__main__":
